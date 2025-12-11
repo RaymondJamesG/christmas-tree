@@ -48,7 +48,7 @@
 </head>
 <body>
 
-<video id="video-input" playsinline webkit-playsinline></video>
+<video id="video-input" playsinline webkit-playsinline muted autoplay></video> 
 <div id="canvas-container"></div>
 
 <div id="loading">
@@ -202,7 +202,6 @@ const cameraUtils = new Camera(videoElement, {
     height: isMobile ? 480 : 480,
     facingMode: 'user' // 强制前置
 });
-cameraUtils.start().then(() => { loadingElement.innerHTML = '✅ 摄像头连接成功！正在加载 3D 模型... 请稍候。'; });
 
 function onHandsResults(results) {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
@@ -299,11 +298,28 @@ window.toggleFullScreen = function() {
     else if (document.exitFullscreen) document.exitFullscreen();
 }
 
-initScene();
-animate();
+// ----------------------------------------------------
+// 最终修复：关键初始化顺序（推迟 Three.js 初始化）
+// ----------------------------------------------------
+
+const cameraPromise = cameraUtils.start();
+
+cameraPromise.then(() => {
+    // 1. 成功连接摄像头后，才初始化 Three.js 场景
+    initScene(); 
+    // 2. 启动渲染循环
+    animate();   
+    
+    // 3. 移除加载提示
+    loadingElement.style.opacity = 0; 
+    setTimeout(()=>loadingElement.remove(),500);
+
+}).catch((error) => {
+    // 如果摄像头启动失败 (例如网络或权限问题)，显示错误信息
+    console.error("Camera startup failed:", error);
+    loadingElement.innerHTML = `❌ 摄像头启动失败！<br>请检查您的网络连接是否稳定。<br>错误: ${error.name}`;
+});
+// ----------------------------------------------------
 </script>
 </body>
 </html>
-
-
-
