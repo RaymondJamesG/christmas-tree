@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>🎄 掌上圣诞粒子</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Helvetica Neue', sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; touch-action: none; }
+        
+        /* 手机端视频预览小窗 - 放在左上角 */
+        #video-input { 
+            position: absolute; top: 10px; left: 10px; 
+            width: 120px; height: 160px; /* 竖屏比例 */
+            transform: scaleX(-1); /* 镜像翻转 */
+            opacity: 0.6; border-radius: 8px; z-index: 2; pointer-events: none; object-fit: cover;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        
+        /* UI 界面 */
+        #ui-layer {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            z-index: 10; display: flex; flex-direction: column; gap: 15px; align-items: center; width: 90%;
+        }
+        
+        .btn-row { display: flex; gap: 10px; }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: white; padding: 12px 24px; border-radius: 30px;
+            cursor: pointer; font-size: 14px; font-weight: bold;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+        
+        #file-input { display: none; }
+
+        /* Loading */
+        #loading {
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-size: 18px; pointer-events: none; z-index: 20; text-align: center;
+            line-height: 1.6;
+        }
+        .loading-sub { font-size: 12px; color: #aaa; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<video id="video-input" playsinline webkit-playsinline></video>
+<div id="canvas-container"></div>
+
+<div id="loading">
+    <div>🎄 正在连接视觉神经...</div>
+    <div class="loading-sub">请允许摄像头权限<br>并保持手机竖屏</div>
+</div>
+
+<div id="ui-layer">
+    <div class="btn-row">
+        <button class="btn" onclick="document.getElementById('file-input').click()">📷 添加照片</button>
+        <button class="btn" onclick="toggleFullScreen()">⛶ 全屏</button>
+    </div>
+    <div style="color: rgba(255,255,255,0.7); font-size: 12px; text-align: center; background: rgba(0,0,0,0.3); padding: 5px 10px; border-radius: 10px;">
+        👋张开: 旋转 | ✊握拳: 聚合 | 👌捏合: 抓取
+    </div>
+</div>
+
+<input type="file" id="file-input" multiple accept="image/*">
+
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+            "@mediapipe/hands": "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js",
+            "@mediapipe/camera_utils": "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js",
+            "gsap": "https://unpkg.com/gsap@3.12.5/index.js"
+        }
+    }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { Hands } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/+esm';
+import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1632432233/+esm';
+import gsap from 'gsap';
+
+// 检测手机
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+const CONFIG = {
+    particleCount: isMobile ? 600 : 1200, // 手机减半粒子
+    treeHeight: isMobile ? 35 : 40,
+    treeRadius: isMobile ? 12 : 15,
+    colors: [0xff0000, 0x00ff00, 0xffd700, 0xffffff, 0x00ffff],
+    emojis: ['🎁', '🔔', '👔', '🎅', '🎄', '❄️', '⭐']
+};
+
+let scene, camera, renderer, composer;
+let particles = [];
+let photoParticles = [];
+let isPinching = false, isFist = false, activePhotoIndex = -1;
+const videoElement = document.getElementById('video-input');
+const loadingElement = document.getElementById('loading');
+
+function initScene() {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 20, isMobile ? 70 : 60); // 手机端相机拉远一点
+
+    renderer = new THREE.WebGLRenderer({ antialias: !isMobile, alpha: true }); // 手机关闭抗锯齿提速
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+    // 后处理 (手机端降低分辨率)
+    const renderScene = new RenderPass(scene, camera);
+    const bloomRes = isMobile ? 0.25 : 1.0; 
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth * bloomRes, window.innerHeight * bloomRes), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0;
+    bloomPass.strength = isMobile ? 1.0 : 1.2;
+    bloomPass.radius = 0.5;
+
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+
+    const ambientLight = new THREE.AmbientLight(0x404040, 2);
+    scene.add(ambientLight);
+    const pointLight = new THREE.PointLight(0xffaa00, 2, 100);
+    pointLight.position.set(0, 40, 0);
+    scene.add(pointLight);
+
+    createParticles();
+    window.addEventListener('resize', onWindowResize, false);
+}
+
+function createEmojiTexture(emoji) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128; canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.font = '90px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = 'white';
+    ctx.fillText(emoji, 64, 64);
+    return new THREE.CanvasTexture(canvas);
+}
+
+function createParticles() {
+    const group = new THREE.Group();
+    scene.add(group);
+    
+    for(let i = 0; i < CONFIG.particleCount; i++) {
+        const y = (i / CONFIG.particleCount) * CONFIG.treeHeight;
+        const radius = (1 - y / CONFIG.treeHeight) * CONFIG.treeRadius + 1;
+        const angle = i * 2.5;
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius;
+        
+        let mesh, isPhoto = false;
+        const r = Math.random();
+
+        if (r > 0.94) { // 6% 照片位
+            const geo = new THREE.PlaneGeometry(2.5, 2.5);
+            const mat = new THREE.MeshBasicMaterial({ color: 0x444444, side: THREE.DoubleSide });
+            mesh = new THREE.Mesh(geo, mat);
+            isPhoto = true;
+        } else if (r > 0.6) { // Emoji
+            const mat = new THREE.SpriteMaterial({ map: createEmojiTexture(CONFIG.emojis[Math.floor(Math.random()*CONFIG.emojis.length)]) });
+            mesh = new THREE.Sprite(mat);
+            mesh.scale.set(1.8, 1.8, 1.8);
+        } else { // 几何
+            const size = Math.random() * 0.5 + 0.3;
+            const geo = new THREE.SphereGeometry(size, 8, 8);
+            const mat = new THREE.MeshStandardMaterial({ color: CONFIG.colors[Math.floor(Math.random()*CONFIG.colors.length)], roughness: 0.2 });
+            mesh = new THREE.Mesh(geo, mat);
+        }
+        
+        mesh.position.set(x, y, z);
+        mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, 0);
+        
+        const pObj = { mesh, originalPos: new THREE.Vector3(x, y, z), currentPos: new THREE.Vector3(x, y, z), isPhoto, id: i };
+        particles.push(pObj);
+        if(isPhoto) photoParticles.push(pObj);
+        group.add(mesh);
+    }
+}
+
+// MediaPipe 
+const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 }); // 手机端限制1只手
+hands.onResults(onHandsResults);
+
+// 相机配置
+const cameraUtils = new Camera(videoElement, {
+    onFrame: async () => { await hands.send({image: videoElement}); },
+    width: isMobile ? 360 : 640, // 降低分辨率提速
+    height: isMobile ? 480 : 480,
+    facingMode: 'user' // 强制前置
+});
+cameraUtils.start().then(() => { loadingElement.style.opacity = 0; setTimeout(()=>loadingElement.remove(),500); });
+
+function onHandsResults(results) {
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const lm = results.multiHandLandmarks[0];
+        
+        // 握拳检测
+        const wrist = lm[0];
+        const tips = [8, 12, 16, 20];
+        let d = 0; tips.forEach(i => d += Math.hypot(lm[i].x - wrist.x, lm[i].y - wrist.y));
+        isFist = (d / 4) < 0.18;
+
+        // 捏合检测
+        isPinching = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) < 0.05;
+
+        if (isPinching && activePhotoIndex === -1 && Math.random() > 0.8) {
+             const available = photoParticles.filter(p => p.mesh.visible);
+             if(available.length) activatePhoto(available[Math.floor(Math.random()*available.length)]);
+        } else if (!isPinching && activePhotoIndex !== -1) {
+            releasePhoto();
+        }
+    } else {
+        isFist = isPinching = false;
+    }
+}
+
+function activatePhoto(p) {
+    if (activePhotoIndex !== -1) return;
+    activePhotoIndex = p.id;
+    p.tempState = { pos: p.mesh.position.clone(), scale: p.mesh.scale.clone(), rot: p.mesh.rotation.clone() };
+    
+    const target = camera.position.clone().add(camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(isMobile?10:15));
+    gsap.to(p.mesh.position, { x: target.x, y: target.y, z: target.z, duration: 1, ease: "power2.out" });
+    gsap.to(p.mesh.scale, { x: 6, y: 6, z: 6, duration: 0.8 });
+    gsap.to(p.mesh.rotation, { z: Math.PI*2, duration: 1 });
+    p.mesh.material.emissive = new THREE.Color(0x333333);
+}
+
+function releasePhoto() {
+    if (activePhotoIndex === -1) return;
+    const p = photoParticles.find(p => p.id === activePhotoIndex);
+    if(p) {
+        gsap.to(p.mesh.position, { x: p.tempState.pos.x, y: p.tempState.pos.y, z: p.tempState.pos.z, duration: 0.8 });
+        gsap.to(p.mesh.scale, { x: p.tempState.scale.x, y: p.tempState.scale.y, z: p.tempState.scale.z, duration: 0.6 });
+        gsap.to(p.mesh.rotation, { x: p.tempState.rot.x, y: p.tempState.rot.y, z: p.tempState.rot.z, duration: 0.6 });
+        p.mesh.material.emissive = new THREE.Color(0x000000);
+    }
+    activePhotoIndex = -1;
+}
+
+document.getElementById('file-input').addEventListener('change', (e) => {
+    const files = e.target.files;
+    if(!files.length) return;
+    let fIdx = 0;
+    photoParticles.forEach(p => {
+        if(fIdx >= files.length) fIdx = 0;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const img = new Image();
+            img.onload = () => {
+                const tex = new THREE.Texture(img); tex.needsUpdate = true; tex.colorSpace = THREE.SRGBColorSpace;
+                p.mesh.material = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+            };
+            img.src = ev.target.result;
+        };
+        reader.readAsDataURL(files[fIdx++]);
+    });
+});
+
+function animate() {
+    requestAnimationFrame(animate);
+    const time = Date.now() * 0.001;
+    if (!isFist) scene.rotation.y += 0.005;
+
+    particles.forEach(p => {
+        if (p.id === activePhotoIndex) { p.mesh.rotation.y += 0.02; return; }
+        let t = p.originalPos.clone();
+        if (isFist) { t.x *= 0.2; t.z *= 0.2; t.y = (t.y - CONFIG.treeHeight/2)*0.5 + CONFIG.treeHeight/2; }
+        t.y += Math.sin(time*2 + p.id*0.1)*0.3;
+        p.currentPos.lerp(t, 0.08);
+        p.mesh.position.copy(p.currentPos);
+        if(!p.isPhoto) { p.mesh.rotation.x += 0.01; p.mesh.rotation.y += 0.02; }
+    });
+    composer.render();
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+}
+window.toggleFullScreen = function() {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+    else if (document.exitFullscreen) document.exitFullscreen();
+}
+
+initScene();
+animate();
+</script>
+</body>
+</html>
