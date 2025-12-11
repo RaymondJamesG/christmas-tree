@@ -202,7 +202,7 @@ const cameraUtils = new Camera(videoElement, {
     height: isMobile ? 480 : 480,
     facingMode: 'user' // 强制前置
 });
-cameraUtils.start().then(() => { loadingElement.style.opacity = 0; setTimeout(()=>loadingElement.remove(),500); });
+cameraUtils.start().then(() => { loadingElement.style.opacity = 0; setTimeout(()=>loadingElement.innerHTML = '✅ 摄像头连接成功！正在加载 3D 模型... 请稍候。';,500); });
 
 function onHandsResults(results) {
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
@@ -304,3 +304,4 @@ animate();
 </script>
 </body>
 </html>
+
