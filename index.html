@@ -195,9 +195,9 @@
     <!-- Main Logic -->
     <script type="module">
         import * as THREE from 'three';
+        // PMREMGenerator Removed from import because it is in THREE core now
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-        import { PMREMGenerator } from 'three/addons/pmrem/PMREMGenerator.js';
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -345,7 +345,8 @@
                 this.camera.position.set(0, 2, 50);
 
                 // Environment
-                const pmremGenerator = new PMREMGenerator(this.renderer);
+                // FIX: Use THREE.PMREMGenerator (Core)
+                const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
                 this.scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
 
                 // Lighting
